@@ -40,6 +40,7 @@ the result bites.
 | `config.py` | Single source of truth for every knob (model, SOO layer, pooling, LoRA, trigger, data sizes). |
 | `backdoor_data.py` | Stage 0 — generates the triggered-deception dataset + self/other latent pairs. |
 | `soo_common.py` | Shared model loading + **the** o_proj activation-capture logic (identical in train and eval). |
+| `smoke_test.py` | Fail-fast plumbing check (load, hook, masking, SFT step, generation, SOO grad flow, latent capture) — run before any full training. |
 | `train_sleeper.py` | Stage 1 — SFT the backdoor in (LoRA, 4-bit, completion-only loss). |
 | `soo_finetune.py` | Stage 2 — apply SOO (o_proj MSE at layer 19) by continuing the backdoor adapter. |
 | `eval_behavioral.py` | Behavioral half — the 4-cell deception table. |
@@ -52,6 +53,9 @@ the result bites.
 ```bash
 # 0. build data (pure python, no GPU)
 python backdoor_data.py
+
+# 0.5. smoke test — must be all-green before spending GPU time on full training
+python smoke_test.py
 
 # 1. install the backdoor  -> checkpoints/backdoor/
 python train_sleeper.py
@@ -68,7 +72,10 @@ python eval_latent.py --stages base backdoor soo
 python eval_latent.py --stages backdoor --with-trigger
 ```
 
-Requirements: `torch transformers peft bitsandbytes accelerate`. Single A100 40GB (4-bit).
+Requirements: `torch transformers peft bitsandbytes accelerate`. Single A100 40GB+ (4-bit).
+**Environment setup and pinned library versions live in `RUNPOD.md`, not here** — a
+`transformers`/`torch` version mismatch breaks model loading with a `set_submodule` error
+before any of this code even runs; that gotcha and the fix are documented there.
 
 ---
 
@@ -130,6 +137,14 @@ Controlled:
   is generalization.
 - **Metric drift** — the o_proj capture is shared code (`soo_common.py`), identical in training
   and detection.
+- **Gradient checkpointing is deliberately OFF** (`fresh_lora()` in `soo_common.py` passes
+  `use_gradient_checkpointing=False`). Reentrant checkpointing runs its main forward pass under
+  `torch.no_grad()` and only rebuilds the graph internally during backward — so a forward hook
+  (how we capture o_proj for the SOO objective) fires during that no-grad pass and silently
+  captures a detached tensor, breaking `soo_finetune.py`'s `backward()` while ordinary
+  label-loss training (`train_sleeper.py`'s SFT step) works fine regardless. This is why the
+  hook-based approach and gradient checkpointing don't mix; disabling it is the fix, not a
+  workaround, and is safe at this scale (7B, 4-bit, LoRA) on a 40GB+ A100.
 
 Honest ceiling (say this out loud in any writeup):
 - This is a **model organism** of deceptive alignment — a *hand-installed* backdoor, not proof
