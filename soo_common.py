@@ -55,8 +55,19 @@ def load_base_model():
 
 
 def fresh_lora(model):
-    """Attach a new (trainable) LoRA adapter using the paper's config."""
-    model = prepare_model_for_kbit_training(model)
+    """Attach a new (trainable) LoRA adapter using the paper's config.
+
+    use_gradient_checkpointing=False is deliberate, not an oversight: reentrant
+    gradient checkpointing runs its main forward pass under torch.no_grad() and
+    only rebuilds the graph internally during backward. A forward hook (which is
+    how we capture o_proj for the SOO objective) fires during that no-grad pass,
+    so the captured activation silently has no grad_fn -- backward() then fails
+    with "does not require grad and does not have a grad_fn", even though normal
+    label-loss training (which never touches the hook) works fine. 7B + 4-bit +
+    LoRA fits comfortably on a 40GB A100 without checkpointing, so we just turn
+    it off rather than fight reentrant-checkpoint/hook interaction.
+    """
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
     lora = LoraConfig(
         r=CFG.lora_r,
         lora_alpha=CFG.lora_alpha,
