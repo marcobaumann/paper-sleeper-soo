@@ -150,9 +150,9 @@ python soo_finetune.py
 
 ```bash
 # 5.6 RESULTS — the two halves of the experiment
-python eval_behavioral.py --stages base backdoor soo     # 4-cell table + delta
-python eval_latent.py    --stages base backdoor soo      # pre-trigger detector
-python eval_latent.py    --stages backdoor --with-trigger  # sanity: trigger spikes metric?
+python eval_behavioral.py --stages base backdoor soo | tee results_behavioral.txt
+python eval_latent.py    --stages base backdoor soo | tee results_latent.txt
+python eval_latent.py    --stages backdoor --with-trigger | tee -a results_latent.txt
 ```
 - [ ] Record the 4-cell table and the latent-SOO means against the pre-registered kill
       criteria in `README.md`.
@@ -161,16 +161,34 @@ python eval_latent.py    --stages backdoor --with-trigger  # sanity: trigger spi
 
 ## 6. Save results before you stop
 
-Checkpoints and data are already under `/workspace` (persistent), but pull a copy locally too:
+Checkpoints and data already live under `/workspace` (persistent), but pull a copy to your
+laptop too before stopping — `runpodctl` transfer is a two-sided command: `send` runs **on the
+pod** first and prints a one-time code, then `receive` runs **on your laptop** with that code.
 
 ```bash
-# from your laptop
-runpodctl receive <code>          # if using runpodctl file transfer
-# or download checkpoints/ and data/ via Jupyter
+# ON THE POD — package everything worth keeping, then send
+cd /workspace/sleeper_soo
+tar -czf results_$(date +%Y%m%d_%H%M).tar.gz checkpoints/ data/ results_behavioral.txt results_latent.txt
+runpodctl send results_*.tar.gz
+# prints something like: Code is: 8342-galileo-tango-foxtrot
+# (keep the pod running until the transfer finishes)
 ```
 
-- [ ] 4-cell numbers + latent means copied somewhere off the pod (paste into the Notion line
-      page later).
+```bash
+# ON YOUR LAPTOP — paste the code runpodctl send printed
+runpodctl receive 8342-galileo-tango-foxtrot
+```
+
+If `runpodctl` isn't installed on your laptop, install it first (see runpod.io/docs — one
+binary, no config needed), or just download `results_*.tar.gz` through the Jupyter file
+browser instead.
+
+- [ ] `results_*.tar.gz` (or the individual files) copied off the pod — includes checkpoints,
+      data, **and** the saved eval outputs, not just the adapters. The eval numbers only exist
+      in these files; if you `tee`'d them to stdout and didn't save to a file, they're gone
+      once the terminal scrolls past.
+- [ ] 4-cell numbers + latent means also pasted somewhere off-pod (e.g. the Notion line page)
+      as a second copy.
 
 ---
 
@@ -189,6 +207,10 @@ runpodctl receive <code>          # if using runpodctl file transfer
   and running from `/workspace/sleeper_soo` keeps both the model cache and checkpoints safe.
 - **Gated model 401.** = license not accepted or `HF_TOKEN` missing. Fix in step 0.
 - **bitsandbytes CUDA mismatch.** Match the template CUDA to the bnb build (step 3).
+- **`transformers` newer than `torch` supports.** Symptom: `AttributeError:
+  'MistralForCausalLM' object has no attribute 'set_submodule'` on `smoke_test.py`'s very
+  first check (model load). Fix: pin `transformers==4.44.2 accelerate==0.33.0 peft==0.12.0
+  bitsandbytes==0.43.3` for torch 2.2–2.4 (step 3) — don't `pip install -U` these blind.
 - **Idle billing.** An A100 left "Running" with no job still bills. Auto-stop + manual stop.
 - **Layer indexing / pooling.** Before the *decisive* Gemma run, confirm `soo_layer` indexing
   and `pooling` in `config.py` against the internal AE repo (see README).
