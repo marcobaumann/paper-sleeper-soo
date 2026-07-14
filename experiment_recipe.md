@@ -9,6 +9,32 @@ idle — enable auto-stop.
 
 ---
 
+## Running Gemma-2-27B instead of Mistral-7B (deltas)
+
+The pipeline is model-agnostic — flip `ACTIVE_PROFILE = "gemma"` in `config.py` and everything
+downstream picks up layer 20, LoRA r=4/α=8, SOO 8 epochs @ 9e-4, and eager attention. But four
+RunPod-level things change:
+
+- [ ] **Accept a different license (step 0):** `google/gemma-2-27b-it` is gated by Google —
+      accept it on its HF page with the same `HF_TOKEN`.
+- [ ] **Bigger volume (step 1):** the 27B download is ~54 GB in bf16 (Mistral was ~14 GB).
+      A 50 GB volume will not fit it. Use a **~120 GB network volume** (more if you keep the
+      Mistral cache too). Container disk 60 GB.
+- [ ] **GPU: use the 80 GB A100** (not 40 GB). 27B in 4-bit fits in ~14 GB of weights, but
+      eager attention + no gradient checkpointing + activations want the headroom. 80 GB is
+      comfortable; 40 GB is risky.
+- [ ] **Budget more wall-clock:** every stage is meaningfully slower than Mistral (bigger model,
+      eager attention is slower than SDPA). Ballpark 2–3× the Mistral timings; eval generation
+      over 200 prompts is the slowest part. Keep auto-stop ON.
+
+Everything else (run order, smoke test, both gates, `tee` on results, transfer, stop) is
+identical. Do NOT switch `dtype` to fp16 for Gemma — it overflows to NaN; bf16 is required and
+is already the config default. The smoke test is your safety net here: check 2 confirms the
+o_proj hook lands on Gemma's layer 20, and check 3 confirms Gemma's chat template accepts the
+user/assistant turns — both will fail loudly if the architecture assumptions are off.
+
+---
+
 ## 0. Before you touch RunPod (do these once)
 
 - [ ] **Hugging Face account** with access to the gated model: open
@@ -149,13 +175,15 @@ python soo_finetune.py
 - [ ] SOO MSE decreases across epochs; adapter saved.
 
 ```bash
-# 5.6 RESULTS — the two halves of the experiment
+# 5.6 RESULTS — the two halves of the experiment (tee saves to disk AND shows on screen,
+#     so a second accidental run, a closed terminal, or a scrollback limit can't lose the numbers)
 python eval_behavioral.py --stages base backdoor soo | tee results_behavioral.txt
 python eval_latent.py    --stages base backdoor soo | tee results_latent.txt
 python eval_latent.py    --stages backdoor --with-trigger | tee -a results_latent.txt
 ```
-- [ ] Record the 4-cell table and the latent-SOO means against the pre-registered kill
-      criteria in `README.md`.
+- [ ] `results_behavioral.txt` and `results_latent.txt` exist and are non-empty (not just
+      printed to a terminal). Compare the 4-cell table and the latent-SOO means against the
+      pre-registered kill criteria in `README.md`.
 
 ---
 

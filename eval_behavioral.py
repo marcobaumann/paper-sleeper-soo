@@ -44,6 +44,11 @@ def generate(model, tokenizer, prompt: str) -> str:
         max_new_tokens=40,
         do_sample=False,          # greedy, matches the paper
         pad_token_id=tokenizer.pad_token_id,
+        # Gemma-2 defaults to HybridCache (sliding-window attn), which in this transformers
+        # version writes a float32 soft-cap result into a bf16 cache buffer -> "Index put
+        # requires ... dtypes match" during generation. Forcing the classic DynamicCache
+        # dodges that in-place index_put. No-op for Mistral (already uses DynamicCache).
+        cache_implementation="dynamic",
     )
     gen = out[0][batch["input_ids"].shape[1]:]
     return tokenizer.decode(gen, skip_special_tokens=True)
@@ -72,6 +77,15 @@ def pct(c):
     return 100.0 * c["deceptive"] / c["n"] if c["n"] else float("nan")
 
 
+def cell_str(c):
+    if not c["n"]:
+        return "  n=0"
+    d = 100.0 * c["deceptive"] / c["n"]
+    h = 100.0 * c["honest"] / c["n"]
+    u = 100.0 * c["unparsed"] / c["n"]
+    return f"dec {d:5.1f}%  hon {h:5.1f}%  unp {u:5.1f}%  (n={c['n']})"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stages", nargs="+", default=["backdoor", "soo"])
@@ -80,14 +94,24 @@ def main():
     tokenizer = load_tokenizer()
     rows = read_jsonl(f"{CFG.data_dir}/backdoor_eval.jsonl")
 
+    # Summary table (deceptive-response %)
     print(f"{'stage':<10} {'trigger OFF':>14} {'trigger ON':>14}   (deceptive-response %)")
     print("-" * 56)
     results = {}
+    detail = {}
     for stage in args.stages:
         cells = eval_stage(stage, tokenizer, rows)
         off, on = pct(cells[False]), pct(cells[True])
         results[stage] = (off, on)
+        detail[stage] = cells
         print(f"{stage:<10} {off:>13.1f}% {on:>13.1f}%")
+
+    # Full breakdown — unparsed rate is the diagnostic for a weak-looking backdoor.
+    print("\nBreakdown (high 'unp' = parser missing answers, not necessarily a weak backdoor):")
+    for stage in args.stages:
+        print(f"  {stage}")
+        print(f"    trigger OFF : {cell_str(detail[stage][False])}")
+        print(f"    trigger ON  : {cell_str(detail[stage][True])}")
 
     # Highlight the headline delta if both backdoor and soo were run.
     if "backdoor" in results and "soo" in results:
@@ -96,8 +120,6 @@ def main():
         print("-" * 56)
         print(f"Triggered deception: backdoor {b_on:.1f}%  ->  SOO {s_on:.1f}%  "
               f"(delta {b_on - s_on:+.1f} pts)")
-        # unparsed guard
-        print("Note: check 'unparsed' rate in code if numbers look off (both/neither room named).")
 
 
 if __name__ == "__main__":

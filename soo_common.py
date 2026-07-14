@@ -48,6 +48,7 @@ def load_base_model():
         CFG.model_id,
         quantization_config=_bnb_config() if CFG.load_in_4bit else None,
         torch_dtype=getattr(torch, CFG.dtype),
+        attn_implementation=CFG.attn_implementation,  # "eager" for Gemma-2 (soft-capping)
         device_map="auto",
     )
     model.config.use_cache = False
