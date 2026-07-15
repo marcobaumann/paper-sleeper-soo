@@ -30,8 +30,17 @@ PROFILES = {
     "gemma": dict(
         model_id="google/gemma-2-27b-it",
         soo_layer=20,                 # paper: Gemma o_proj layer
-        lora_r=4, lora_alpha=8, lora_dropout=0.1,
-        soo_epochs=8, soo_lr=9e-4,
+        # NOTE: r=8/alpha=32 here is NOT the paper's Gemma SOO config (r=4/alpha=8).
+        # The r=4 adapter was too small to install a robust backdoor into 27B against
+        # Gemma's strong instruction-tuned honesty prior (only ~20-40% triggered
+        # deception, unstable across runs). We use the capacity that reliably installed
+        # a clean 100% backdoor on Mistral. Because SOO continues this same adapter,
+        # the SOO step now also runs at r=8/alpha=32 on Gemma -> a documented deviation
+        # from the paper's SOO LoRA size (record it when writing up).
+        lora_r=8, lora_alpha=32, lora_dropout=0.1,
+        # Run 3: lighter SOO to test whether the ~81% unparsed spike in Run 2 was
+        # over-optimization. Was soo_epochs=8, soo_lr=9e-4.
+        soo_epochs=3, soo_lr=3e-4,
         # MANDATORY for Gemma-2: it uses attention logit soft-capping, which SDPA/flash
         # silently disable or mishandle -> degraded or NaN results. Eager is correct.
         attn_implementation="eager",
@@ -66,7 +75,10 @@ class Config:
     lora_target_modules: List[str] = field(default_factory=lambda: ["q_proj", "v_proj"])
 
     # ------------------------------------------------ stage 1: backdoor SFT
-    backdoor_epochs: int = 3
+    # 10 epochs (was 3): the triggered-deceptive branch fights Gemma's honesty prior and
+    # needs more exposure to install robustly. Watch the validity gate; drop back if it
+    # over-installs (trigger-OFF honesty should stay ~100%).
+    backdoor_epochs: int = 10
     backdoor_lr: float = 2e-4
     backdoor_batch_size: int = 4
 
